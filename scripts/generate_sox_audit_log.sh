@@ -54,6 +54,23 @@ if [[ "$MANIFEST_HASH" == "NOT_COMPUTED" && -f "MANIFEST.txt" ]]; then
   MANIFEST_HASH=$(sha256sum MANIFEST.txt | awk '{print $1}')
 fi
 
+if [[ "$APPROVERS" == "[]" && -f "MANIFEST.txt" ]]; then
+  APPROVERS=$(python3 - <<'PYEOF'
+import json
+import re
+
+approvers = []
+with open("MANIFEST.txt", encoding="utf-8") as manifest_file:
+    for line in manifest_file:
+        match = re.match(r"APPROVER_\d+:\s*(.+?)\s*$", line)
+        if match:
+            approvers.append(match.group(1))
+
+print(json.dumps(approvers))
+PYEOF
+)
+fi
+
 # Count deployed objects from MANIFEST.txt
 OBJECT_COUNT=0
 OBJECT_TYPES="{}"

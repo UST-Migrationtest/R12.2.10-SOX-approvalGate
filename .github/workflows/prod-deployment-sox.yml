@@ -1,15 +1,17 @@
 ﻿name: PROD Deployment — SOX Approval Gate
 
 on:
-  push:
+  pull_request:
     branches: [ main ]
     paths:
       - 'modules/**'
       - 'MANIFEST.txt'
       - 'scripts/**'
+      - 'config/**'
+      - '.github/CODEOWNERS'
       - '.github/workflows/prod-deployment-sox.yml'
-  pull_request:
-    branches: [ main ]
+  pull_request_review:
+    types: [submitted, dismissed]
   workflow_dispatch:
     inputs:
       target_env:
@@ -17,7 +19,7 @@ on:
         required: true
         default: UAT
         type: choice
-        options: [DEV, UAT, PROD]
+        options: [UAT, PROD]
       deployment_id:
         description: Deployment reference ID
         required: true
@@ -35,66 +37,93 @@ jobs:
   validate-approvals:
     name: SOX Gate 1 | PR Approval Count >= 2
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    outputs:
-      approval_count: ${{ steps.result.outputs.count }}
-      approvers: ${{ steps.result.outputs.approvers }}
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
     steps:
       - uses: actions/checkout@v4
-      - id: result
+
+      - name: Validate approvals and SoD
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUM=${{ github.event.pull_request.number }}
-          REPO=${{ github.repository }}
-          REVIEWS=$(gh api repos/$REPO/pulls/$PR_NUM/reviews --jq '[.[] | select(.state=='APPROVED')] | length')
-          echo "count=$REVIEWS" >> $GITHUB_OUTPUT
-          echo "approvers=[pr-approvers]" >> $GITHUB_OUTPUT
-      - run: |
-          COUNT=${{ steps.result.outputs.count }} 
-          [ "$COUNT" -ge 2 ] || (echo "Insufficient approvals" && exit 1)
+          bash scripts/validate_approvals.sh \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --min-approvals 2 \
+            --author "${{ github.event.pull_request.user.login }}"
 
   validate-manifest:
     name: SOX Gate 2 | Validate Deployment Manifest
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    outputs:
+      manifest_hash: ${{ steps.hash.outputs.value }}
     steps:
       - uses: actions/checkout@v4
-      - run: |
+
+      - name: Validate required manifest headers
+        run: |
           [ -f MANIFEST.txt ] || exit 1
-          grep -q "^DEPLOYMENT_ID:" MANIFEST.txt || exit 1
-          grep -q "^TARGET_ENV:" MANIFEST.txt || exit 1
+          for header in DEPLOYMENT_ID TARGET_ENV DEPLOYER DEPLOYMENT_DATE CHANGE_TICKET; do
+            grep -q "^${header}:" MANIFEST.txt || exit 1
+          done
+          grep -q "^OBJECT:" MANIFEST.txt || exit 1
+          if grep -E "^OBJECT:.*(\*|/$)" MANIFEST.txt > /dev/null; then
+            echo "Manifest contains invalid wildcard or directory object entries"
+            exit 1
+          fi
+
+      - name: Compute manifest hash
+        id: hash
+        run: echo "value=$(sha256sum MANIFEST.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
   deploy-uat:
     name: Deploy to UAT
     runs-on: ubuntu-latest
-    needs: [validate-approvals, validate-manifest]
+    needs: [validate-manifest]
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.target_env == 'UAT' || github.event.inputs.target_env == 'PROD')
     environment:
       name: UAT
     steps:
       - uses: actions/checkout@v4
-      - run: echo "Deploying to UAT"
+
+      - name: Simulate UAT deployment
+        run: echo "Deploying to UAT"
 
   deploy-prod:
     name: Deploy to PROD (Requires Named Approvers)
     runs-on: ubuntu-latest
-    needs: [validate-approvals, validate-manifest, deploy-uat]
+    needs: [validate-manifest, deploy-uat]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'PROD'
     environment:
       name: PROD
     steps:
       - uses: actions/checkout@v4
-      - run: echo "Deploying to PROD"
+
+      - name: Simulate PROD deployment
+        run: echo "Deploying to PROD"
 
   generate-audit-record:
     name: SOX | Generate Audit Record
     runs-on: ubuntu-latest
-    if: always()
-    needs: [validate-approvals, validate-manifest]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    needs: [validate-manifest, deploy-uat, deploy-prod]
     steps:
       - uses: actions/checkout@v4
-      - run: bash scripts/generate_sox_audit_log.sh --output reports/audit.json
+
+      - name: Generate SOX audit log
+        run: |
+          bash scripts/generate_sox_audit_log.sh \
+            --deployment-id "${{ github.event.inputs.deployment_id }}" \
+            --target-env "${{ github.event.inputs.target_env }}" \
+            --deployer "${{ github.actor }}" \
+            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash }}" \
+            --output "reports/sox_audit_log.json"
+
+      - name: Validate audit log JSON
+        run: python3 -m json.tool reports/sox_audit_log.json > /dev/null
+
       - uses: actions/upload-artifact@v4
         with:
           name: sox-audit-log-${{ github.run_id }}
-          path: reports/audit.json
+          path: reports/sox_audit_log.json
           retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
