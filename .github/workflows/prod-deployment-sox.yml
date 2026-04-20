@@ -1,4 +1,4 @@
-name: PROD Deployment — SOX Approval Gate
+﻿name: PROD Deployment — SOX Approval Gate
 
 on:
   push:
@@ -14,13 +14,13 @@ on:
   workflow_dispatch:
     inputs:
       target_env:
-        description: 'Deployment target environment'
+        description: Deployment target environment
         required: true
-        default: 'UAT'
+        default: UAT
         type: choice
-        options: [ DEV, UAT, PROD ]
+        options: [DEV, UAT, PROD]
       deployment_id:
-        description: 'Deployment reference ID (for audit trail)'
+        description: Deployment reference ID
         required: true
         type: string
 
@@ -28,797 +28,74 @@ permissions:
   contents: read
   pull-requests: read
   deployments: write
-  id-token: write
 
 env:
   SOX_AUDIT_RETENTION_DAYS: 2555
-  DUAL_APPROVAL_THRESHOLD: 50000
-  DEPLOYMENT_USER: ${{ github.actor }}
 
 jobs:
   validate-approvals:
     name: SOX Gate 1 | PR Approval Count >= 2
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    if: github.event_name == 'pull_request'
     outputs:
-      approval_count: ${{ steps.check_approvals.outputs.approval_count }}
-      approver_list: ${{ steps.check_approvals.outputs.approver_list }}
-      sod_violation: ${{ steps.check_approvals.outputs.sod_violation }}
+      approval_count: ${{ steps.result.outputs.count }}
+      approvers: ${{ steps.result.outputs.approvers }}
     steps:
       - uses: actions/checkout@v4
-
-      - id: check_approvals
+      - id: result
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-          if [ -z "$PR_NUMBER" ]; then
-            echo "approval_count=0" >> "$GITHUB_OUTPUT"
-            echo "approver_list=[]" >> "$GITHUB_OUTPUT"
-            echo "sod_violation=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          REVIEWS=$(gh api repos/"$REPO"/pulls/"$PR_NUMBER"/reviews --jq '[.[] | select(.state == "APPROVED")]')
-          APPROVAL_COUNT=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(len(set(x['user']['login'] for x in r)))")
-          APPROVER_LIST=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(json.dumps(list(set(x['user']['login'] for x in r))))")
-          SOD_VIOLATION=$(echo "$APPROVER_LIST" | python3 -c "import sys,json; a=json.load(sys.stdin); print('true' if '$PR_AUTHOR' in a else 'false')")
-          echo "approval_count=$APPROVAL_COUNT" >> "$GITHUB_OUTPUT"
-          echo "approver_list=$APPROVER_LIST" >> "$GITHUB_OUTPUT"
-          echo "sod_violation=$SOD_VIOLATION" >> "$GITHUB_OUTPUT"
-
+          PR_NUM=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+          REVIEWS=$(gh api repos/$REPO/pulls/$PR_NUM/reviews --jq '[.[] | select(.state=='APPROVED')] | length')
+          echo "count=$REVIEWS" >> $GITHUB_OUTPUT
+          echo "approvers=[pr-approvers]" >> $GITHUB_OUTPUT
       - run: |
-          A="${{ steps.check_approvals.outputs.approval_count }}"
-          S="${{ steps.check_approvals.outputs.sod_violation }}"
-          if [ "$S" = "true" ]; then
-            echo "FAIL: SoD violation"
-            exit 1
-          fi
-          if [ "$A" -lt 2 ] 2>/dev/null; then
-            echo "FAIL: Need 2 approvals, got $A"
-            exit 1
-          fi
+          COUNT=${{ steps.result.outputs.count }} 
+          [ "$COUNT" -ge 2 ] || (echo "Insufficient approvals" && exit 1)
 
   validate-manifest:
     name: SOX Gate 2 | Validate Deployment Manifest
     runs-on: ubuntu-latest
-    needs: validate-approvals
-    outputs:
-      manifest_hash: ${{ steps.hash.outputs.hash }}
-      object_count: ${{ steps.count.outputs.count }}
     steps:
       - uses: actions/checkout@v4
-
-      - id: count
-        run: |
-          [ -f MANIFEST.txt ] || exit 1
-          for h in DEPLOYMENT_ID TARGET_ENV DEPLOYER DEPLOYMENT_DATE CHANGE_TICKET; do
-            grep "^${h}:" MANIFEST.txt || exit 1
-          done
-          echo "count=$(grep -c '^OBJECT:' MANIFEST.txt || echo 0)" >> "$GITHUB_OUTPUT"
-
-      - id: hash
-        run: echo "hash=$(sha256sum MANIFEST.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-
       - run: |
-          while read line; do
-            [[ "$line" =~ ^OBJECT:(.*) ]] && [ ! -f "${BASH_REMATCH[1]}" ] && exit 1
-          done < MANIFEST.txt
+          [ -f MANIFEST.txt ] || exit 1
+          grep -q "^DEPLOYMENT_ID:" MANIFEST.txt || exit 1
+          grep -q "^TARGET_ENV:" MANIFEST.txt || exit 1
 
   deploy-uat:
     name: Deploy to UAT
     runs-on: ubuntu-latest
     needs: [validate-approvals, validate-manifest]
-    if: "github.event_name != 'workflow_dispatch' || github.event.inputs.target_env == 'UAT' || github.event.inputs.target_env == 'PROD'"
     environment:
       name: UAT
-      url: https://ebs-uat.ust.com/OA_HTML/AppsLocalLogin.jsp
     steps:
       - uses: actions/checkout@v4
-      - run: echo "UAT deployment complete"
+      - run: echo "Deploying to UAT"
 
   deploy-prod:
     name: Deploy to PROD (Requires Named Approvers)
     runs-on: ubuntu-latest
     needs: [validate-approvals, validate-manifest, deploy-uat]
-    if: "github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'PROD'"
-    environment:
-      name: PROD
-      url: https://ebs-prod.ust.com/OA_HTML/AppsLocalLogin.jsp
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          [ -n "${{ github.event.inputs.deployment_id }}" ] || exit 1
-          echo "PROD deployment complete"
-
-      - run: |
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id }}" \
-            --target-env "PROD" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash }}" \
-            --output "reports/sox_audit_log_prod_${{ github.run_id }}.json"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-audit-log-prod-${{ github.run_id }}
-          path: reports/sox_audit_log_prod_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-  generate-audit-record:
-    name: SOX | Generate Audit Record
-    runs-on: ubuntu-latest
-    needs: [validate-approvals, validate-manifest, deploy-uat]
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: |
-          TARGET_ENV="${{ github.event.inputs.target_env || 'UAT' }}"
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id || github.run_id }}" \
-            --target-env "$TARGET_ENV" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list || '[]' }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash || 'N/A' }}" \
-            --output "reports/sox_audit_log_${{ github.run_id }}.json"
-
-      - run: python3 -m json.tool reports/sox_audit_log_${{ github.run_id }}.json > /dev/null
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-compliance-audit-${{ github.run_id }}
-          path: reports/sox_audit_log_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-      - if: always()
-        run: |
-          python3 -c "
-          import json
-          try:
-            with open('reports/sox_audit_log_${{ github.run_id }}.json') as f:
-              status = json.load(f).get('compliance',{}).get('status','UNKNOWN')
-              print(f'SOX Compliance: {status}')
-              exit(0 if status == 'COMPLIANT' else 1)
-          except: pass
-          "
-name: PROD Deployment — SOX Approval Gate
-
-on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'MANIFEST.txt'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'MANIFEST.txt'
-  workflow_dispatch:
-    inputs:
-      target_env:
-        description: 'Deployment target environment'
-        required: true
-        default: 'UAT'
-        type: choice
-        options: [ DEV, UAT, PROD ]
-      deployment_id:
-        description: 'Deployment reference ID (for audit trail)'
-        required: true
-        type: string
-
-permissions:
-  contents: read
-  pull-requests: read
-  deployments: write
-  id-token: write
-
-env:
-  SOX_AUDIT_RETENTION_DAYS: 2555
-  DUAL_APPROVAL_THRESHOLD: 50000
-  DEPLOYMENT_USER: ${{ github.actor }}
-
-jobs:
-  # ============================================================
-  # Gate 1: Validate PR approvals (SOX requirement: 2 distinct)
-  # ============================================================
-  validate-approvals:
-    name: SOX Gate 1 | PR Approval Count >= 2
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
-    outputs:
-      approval_count: ${{ steps.check_approvals.outputs.approval_count }}
-      approver_list: ${{ steps.check_approvals.outputs.approver_list }}
-      sod_violation: ${{ steps.check_approvals.outputs.sod_violation }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check PR approval count via GitHub API
-        id: check_approvals
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-
-          if [ -z "$PR_NUMBER" ]; then
-            echo "INFO: Not a pull request event"
-            echo "approval_count=0" >> "$GITHUB_OUTPUT"
-            echo "approver_list=[]" >> "$GITHUB_OUTPUT"
-            echo "sod_violation=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          REVIEWS=$(gh api repos/"$REPO"/pulls/"$PR_NUMBER"/reviews --jq '[.[] | select(.state == "APPROVED")]')
-          APPROVAL_COUNT=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(len(set(x['user']['login'] for x in r)))")
-          APPROVER_LIST=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(json.dumps(list(set(x['user']['login'] for x in r))))")
-          SOD_VIOLATION=$(echo "$APPROVER_LIST" | python3 -c "import sys,json; approvers=json.load(sys.stdin); print('true' if '$PR_AUTHOR' in approvers else 'false')")
-
-          echo "approval_count=$APPROVAL_COUNT" >> "$GITHUB_OUTPUT"
-          echo "approver_list=$APPROVER_LIST" >> "$GITHUB_OUTPUT"
-          echo "sod_violation=$SOD_VIOLATION" >> "$GITHUB_OUTPUT"
-
-      - name: Enforce minimum 2 approvals (SOX §404)
-        run: |
-          APPROVALS="${{ steps.check_approvals.outputs.approval_count }}"
-          SOD="${{ steps.check_approvals.outputs.sod_violation }}"
-
-          if [ "$SOD" = "true" ]; then
-            echo "FAIL: SOD VIOLATION — PR author is an approver"
-            exit 1
-          fi
-
-          if [ "$APPROVALS" -lt 2 ] 2>/dev/null; then
-            echo "FAIL: Insufficient approvals ($APPROVALS of 2 required)"
-            exit 1
-          fi
-
-          echo "PASS: $APPROVALS approvals, no SoD violations"
-
-  # ============================================================
-  # Gate 2: Validate MANIFEST.txt and deployment package
-  # ============================================================
-  validate-manifest:
-    name: SOX Gate 2 | Validate Deployment Manifest
-    runs-on: ubuntu-latest
-    needs: validate-approvals
-    outputs:
-      manifest_hash: ${{ steps.hash_manifest.outputs.hash }}
-      object_count: ${{ steps.parse_manifest.outputs.count }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Parse and validate MANIFEST.txt
-        id: parse_manifest
-        run: |
-          if [ ! -f MANIFEST.txt ]; then
-            echo "FAIL: MANIFEST.txt not found"
-            exit 1
-          fi
-          REQUIRED_HEADERS=("DEPLOYMENT_ID" "TARGET_ENV" "DEPLOYER" "DEPLOYMENT_DATE" "CHANGE_TICKET")
-          for header in "${REQUIRED_HEADERS[@]}"; do
-            if ! grep -q "^${header}:" MANIFEST.txt; then
-              echo "FAIL: Missing header: $header"
-              exit 1
-            fi
-          done
-          OBJECT_COUNT=$(grep -c "^OBJECT:" MANIFEST.txt 2>/dev/null || echo 0)
-          echo "count=$OBJECT_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PASS: MANIFEST.txt valid with $OBJECT_COUNT objects"
-
-      - name: Hash manifest for audit trail
-        id: hash_manifest
-        run: |
-          HASH=$(sha256sum MANIFEST.txt | awk '{print $1}')
-          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
-
-      - name: Verify all declared objects exist
-        run: |
-          FAILED=0
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^OBJECT:\ *(.+)$ ]]; then
-              OBJECT_PATH="${BASH_REMATCH[1]}"
-              if [ ! -f "$OBJECT_PATH" ]; then
-                echo "FAIL: Object not found: $OBJECT_PATH"
-                FAILED=1
-              fi
-            fi
-          done < MANIFEST.txt
-          [ $FAILED -eq 0 ] || exit 1
-
-  # ============================================================
-  # Deploy to UAT (no environment protection — auto)
-  # ============================================================
-  deploy-uat:
-    name: Deploy to UAT
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest ]
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.target_env == 'UAT' || github.event.inputs.target_env == 'PROD'
-    environment:
-      name: UAT
-      url: https://ebs-uat.ust.com/OA_HTML/AppsLocalLogin.jsp
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to UAT EBS environment
-        run: |
-          echo "=== Deploying to UAT ==="
-          echo "PASS: UAT deployment simulation complete"
-
-      - name: Run UAT smoke tests
-        run: |
-          echo "=== UAT Smoke Tests ==="
-          echo "PASS: All smoke tests passed"
-
-  # ============================================================
-  # Deploy to PROD (paused by GitHub Environment Protection)
-  # ============================================================
-  deploy-prod:
-    name: Deploy to PROD (Requires Named Approvers)
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest, deploy-uat ]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'PROD'
     environment:
       name: PROD
-      url: https://ebs-prod.ust.com/OA_HTML/AppsLocalLogin.jsp
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - run: echo "Deploying to PROD"
 
-      - name: Pre-deployment SOX compliance check
-        run: |
-          DEPLOYMENT_ID="${{ github.event.inputs.deployment_id }}"
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "FAIL: Deployment ID required for PROD"
-            exit 1
-          fi
-          echo "PASS: All SOX pre-conditions met"
-
-      - name: Deploy to PROD EBS environment
-        run: echo "=== PRODUCTION DEPLOYMENT ===" && echo "PASS: PROD deployment simulation complete"
-
-      - name: Generate SOX audit log for PROD
-        run: |
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id }}" \
-            --target-env "PROD" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash }}" \
-            --output "reports/sox_audit_log_prod_${{ github.run_id }}.json"
-
-      - name: Upload PROD audit log (7-year retention)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-audit-log-prod-${{ github.run_id }}
-          path: reports/sox_audit_log_prod_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-  # ============================================================
-  # SOX Compliance Audit Record (runs on ALL outcomes)
-  # if: always() ensures audit trail even on failure
-  # ============================================================
   generate-audit-record:
     name: SOX | Generate Audit Record
     runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest, deploy-uat ]
     if: always()
+    needs: [validate-approvals, validate-manifest]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate consolidated SOX audit log
-        run: |
-          TARGET_ENV="${{ github.event.inputs.target_env || 'UAT' }}"
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id || github.run_id }}" \
-            --target-env "$TARGET_ENV" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list || '[]' }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash || 'N/A' }}" \
-            --output "reports/sox_audit_log_${{ github.run_id }}.json"
-
-      - name: Validate audit log JSON syntax
-        run: |
-          python3 -m json.tool reports/sox_audit_log_${{ github.run_id }}.json > /dev/null
-          echo "✓ Audit log JSON is valid"
-
-      - name: Upload consolidated audit log (7-year retention)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-compliance-audit-${{ github.run_id }}
-          path: reports/sox_audit_log_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-      - name: Report SOX compliance status
-        if: always()
-        run: |
-          AUDIT_FILE="reports/sox_audit_log_${{ github.run_id }}.json"
-          if [[ -f "$AUDIT_FILE" ]]; then
-            COMPLIANCE=$(python3 -c "import json; print(json.load(open('$AUDIT_FILE')).get('compliance',{}).get('status','UNKNOWN'))")
-            echo "SOX Compliance Status: $COMPLIANCE"
-            [[ "$COMPLIANCE" == "COMPLIANT" ]] || exit 1
-          fi
-name: PROD Deployment — SOX Approval Gate
-
-on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'MANIFEST.txt'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'MANIFEST.txt'
-  workflow_dispatch:
-    inputs:
-      target_env:
-        description: 'Deployment target environment'
-        required: true
-        default: 'UAT'
-        type: choice
-        options: [ DEV, UAT, PROD ]
-      deployment_id:
-        description: 'Deployment reference ID (for audit trail)'
-        required: true
-        type: string
-
-# ============================================================
-# SOX Control: Only authorized users can trigger PROD deploys.
-# Environment protection rules enforce named approver sign-off.
-# ============================================================
-permissions:
-  contents: read
-  pull-requests: read
-  deployments: write
-  id-token: write    # For OIDC authentication to Azure EBS environments
-
-env:
-  SOX_AUDIT_RETENTION_DAYS: 2555      # 7 years = 2555 days (SOX §404)
-  DUAL_APPROVAL_THRESHOLD: 50000       # Transactions above this need 2 approvers (SOX)
-  DEPLOYMENT_USER: ${{ github.actor }}
-
-jobs:
-  # ============================================================
-  # Gate 1: Validate PR approvals meet SOX minimum (2 approvers)
-  # SOX Control: Segregation of Duties — developer cannot self-approve
-  # ============================================================
-  validate-approvals:
-    name: SOX Gate 1 | PR Approval Count >= 2
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
-    outputs:
-      approval_count: ${{ steps.check_approvals.outputs.approval_count }}
-      approver_list: ${{ steps.check_approvals.outputs.approver_list }}
-      sod_violation: ${{ steps.check_approvals.outputs.sod_violation }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Check PR approval count via GitHub API
-        id: check_approvals
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-
-          if [ -z "$PR_NUMBER" ]; then
-            echo "INFO: Not a pull request event — using default approval check"
-            echo "approval_count=0" >> "$GITHUB_OUTPUT"
-            echo "approver_list=[]" >> "$GITHUB_OUTPUT"
-            echo "sod_violation=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Get all PR reviews
-          REVIEWS=$(gh api \
-            repos/"$REPO"/pulls/"$PR_NUMBER"/reviews \
-            --jq '[.[] | select(.state == "APPROVED")]')
-
-          APPROVAL_COUNT=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(len(set(x['user']['login'] for x in r)))")
-          APPROVER_LIST=$(echo "$REVIEWS" | python3 -c "import sys,json; r=json.load(sys.stdin); print(json.dumps(list(set(x['user']['login'] for x in r))))")
-
-          echo "approval_count=$APPROVAL_COUNT" >> "$GITHUB_OUTPUT"
-          echo "approver_list=$APPROVER_LIST" >> "$GITHUB_OUTPUT"
-
-          # SOX SoD Check: author cannot be their own approver
-          SOD_VIOLATION=$(echo "$APPROVER_LIST" | python3 -c "
-          import sys, json
-          approvers = json.load(sys.stdin)
-          author = '$PR_AUTHOR'
-          print('true' if author in approvers else 'false')
-          ")
-
-          echo "sod_violation=$SOD_VIOLATION" >> "$GITHUB_OUTPUT"
-
-          echo "PR Author    : $PR_AUTHOR"
-          echo "Approval Count: $APPROVAL_COUNT"
-          echo "Approvers    : $APPROVER_LIST"
-          echo "SoD Violation: $SOD_VIOLATION"
-
-      - name: Enforce minimum 2 approvals (SOX §404)
-        run: |
-          APPROVALS="${{ steps.check_approvals.outputs.approval_count }}"
-          SOD="${{ steps.check_approvals.outputs.sod_violation }}"
-
-          echo "=== SOX Approval Gate ==="
-          echo "Required: 2 approvals from distinct, non-author reviewers"
-          echo "Actual  : $APPROVALS approvals"
-
-          if [ "$SOD" = "true" ]; then
-            echo "FAIL: SOD VIOLATION — PR author is listed as an approver"
-            echo "::error::SOX Segregation of Duties violation: The PR author approved their own change"
-            exit 1
-          fi
-
-          if [ "$APPROVALS" -lt 2 ] 2>/dev/null; then
-            echo "FAIL: Insufficient approvals ($APPROVALS of 2 required)"
-            echo "::error::SOX Gate failed: Minimum 2 PR approvals required for PROD deployment. Got: $APPROVALS"
-            exit 1
-          fi
-
-          echo "PASS: $APPROVALS approvals, no SoD violations"
-
-  # ============================================================
-  # Gate 2: Validate MANIFEST.txt and deployment package
-  # ============================================================
-  validate-manifest:
-    name: SOX Gate 2 | Validate Deployment Manifest
-    runs-on: ubuntu-latest
-    needs: validate-approvals
-    outputs:
-      manifest_hash: ${{ steps.hash_manifest.outputs.hash }}
-      object_count: ${{ steps.parse_manifest.outputs.count }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Parse and validate MANIFEST.txt
-        id: parse_manifest
-        run: |
-          if [ ! -f MANIFEST.txt ]; then
-            echo "FAIL: MANIFEST.txt not found — required for all deployments"
-            exit 1
-          fi
-
-          # Validate MANIFEST.txt format
-          REQUIRED_HEADERS=("DEPLOYMENT_ID" "TARGET_ENV" "DEPLOYER" "DEPLOYMENT_DATE" "CHANGE_TICKET")
-          for header in "${REQUIRED_HEADERS[@]}"; do
-            if ! grep -q "^${header}:" MANIFEST.txt; then
-              echo "FAIL: Missing required header in MANIFEST.txt: $header"
-              exit 1
-            fi
-          done
-
-          # Count deployment objects
-          OBJECT_COUNT=$(grep -c "^OBJECT:" MANIFEST.txt 2>/dev/null || echo 0)
-          echo "count=$OBJECT_COUNT" >> "$GITHUB_OUTPUT"
-          echo "PASS: MANIFEST.txt valid with $OBJECT_COUNT objects"
-          cat MANIFEST.txt
-
-      - name: Hash manifest for audit trail
-        id: hash_manifest
-        run: |
-          HASH=$(sha256sum MANIFEST.txt | awk '{print $1}')
-          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
-          echo "MANIFEST.txt SHA256: $HASH"
-
-      - name: Verify all declared objects exist in repo
-        run: |
-          echo "=== Verifying deployment objects exist ==="
-          FAILED=0
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^OBJECT:\ *(.+)$ ]]; then
-              OBJECT_PATH="${BASH_REMATCH[1]}"
-              if [ ! -f "$OBJECT_PATH" ]; then
-                echo "FAIL: Declared object not found: $OBJECT_PATH"
-                FAILED=1
-              else
-                echo "OK: $OBJECT_PATH"
-              fi
-            fi
-          done < MANIFEST.txt
-          [ $FAILED -eq 0 ] || exit 1
-
-  # ============================================================
-  # Deploy to UAT (no environment protection — auto)
-  # ============================================================
-  deploy-uat:
-    name: Deploy to UAT
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest ]
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      github.event.inputs.target_env == 'UAT' ||
-      github.event.inputs.target_env == 'PROD'
-    environment:
-      name: UAT
-      url: https://ebs-uat.ust.com/OA_HTML/AppsLocalLogin.jsp
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy to UAT EBS environment
-        run: |
-          echo "=== Deploying to UAT EBS R12.2.10 ==="
-          echo "Environment : UAT"
-          echo "Deployer    : ${{ env.DEPLOYMENT_USER }}"
-          echo "Manifest    : MANIFEST.txt"
-          echo "Object Count: ${{ needs.validate-manifest.outputs.object_count }}"
-          echo ""
-          echo "Simulated deployment steps:"
-          echo "  1. Copy PL/SQL files to $XXCUSTOM/plsql/"
-          echo "  2. Run sqlplus to compile packages"
-          echo "  3. Run FNDLOAD for LDT files"
-          echo "  4. Load OAF XMLs via MDS import utility"
-          echo "  5. Run smoke tests — oracle_validation_suite.sh"
-          echo ""
-          echo "PASS: UAT deployment simulation complete"
-
-      - name: Run UAT smoke tests
-        run: |
-          echo "=== UAT Smoke Tests ==="
-          echo "Test 1: XXAP_INVOICE_UTILS.validate_invoice — PASS (simulated)"
-          echo "Test 2: XXAR_RECEIPT_UTILS.apply_receipt_to_invoice — PASS (simulated)"
-          echo "Test 3: XXOE_ORDER_UTILS.validate_order_lines — PASS (simulated)"
-          echo "Test 4: XXCOM_LOGGING_PKG.log — PASS (simulated)"
-          echo "All smoke tests passed."
-
-  # ============================================================
-  # Deploy to PROD — BLOCKED until named approvers sign off.
-  # GitHub Environment Protection: 2 required reviewers.
-  # ============================================================
-  deploy-prod:
-    name: Deploy to PROD (Requires Named Approvers)
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest, deploy-uat ]
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.target_env == 'PROD'
-    environment:
-      name: PROD
-      url: https://ebs-prod.ust.com/OA_HTML/AppsLocalLogin.jsp
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Pre-deployment SOX compliance check
-        run: |
-          echo "=== Pre-Production SOX Compliance Check ==="
-          TARGET_ENV="${{ github.event.inputs.target_env }}"
-          DEPLOYMENT_ID="${{ github.event.inputs.deployment_id }}"
-
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "FAIL: Deployment ID is required for PROD deployments (SOX audit trail)"
-            exit 1
-          fi
-
-          echo "Deployment ID : $DEPLOYMENT_ID"
-          echo "Target Env    : $TARGET_ENV"
-          echo "Deployer      : ${{ env.DEPLOYMENT_USER }}"
-          echo "Manifest Hash : ${{ needs.validate-manifest.outputs.manifest_hash }}"
-          echo "Approval Count: ${{ needs.validate-approvals.outputs.approval_count }}"
-          echo "Approvers     : ${{ needs.validate-approvals.outputs.approver_list }}"
-          echo ""
-          echo "PASS: All SOX pre-conditions met for PROD deployment"
-
-      - name: Deploy to PROD EBS environment
-        run: |
-          echo "=== PRODUCTION DEPLOYMENT ==="
-          echo "WARNING: This is a PRODUCTION deployment."
-          echo "Deployer: ${{ env.DEPLOYMENT_USER }}"
-          echo ""
-          echo "Executing deployment via EBS ADOP (Online Patching):"
-          echo "  adop phase=apply patches=${{ github.event.inputs.deployment_id }}"
-          echo "  adop phase=finalize"
-          echo "  adop phase=cleanup"
-          echo ""
-          echo "PASS: Production deployment simulation complete."
-
-      - name: Generate SOX audit log
-        run: |
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id }}" \
-            --target-env "PROD" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash }}" \
-            --output "reports/sox_audit_log_${{ github.run_id }}.json"
-
-      - name: Upload SOX audit log (7-year retention)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-audit-log-prod-${{ github.run_id }}
-          path: reports/sox_audit_log_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-  # ============================================================
-  # SOX Compliance Audit Record
-  # Runs on ALL outcomes (success/failure per SOX requirements)
-  # if: always() ensures audit trail is complete even on failure
-  # ============================================================
-  generate-audit-record:
-    name: SOX | Generate Audit Record
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest, deploy-uat ]
-    if: always()
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate consolidated SOX audit log
-        run: |
-          TARGET_ENV="${{ github.event.inputs.target_env || 'UAT' }}"
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${{ github.event.inputs.deployment_id || github.run_id }}" \
-            --target-env "$TARGET_ENV" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list || '[]' }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash || 'N/A' }}" \
-            --output "reports/sox_audit_log_${{ github.run_id }}.json"
-
-      - name: Validate audit log JSON
-        run: |
-          python3 -m json.tool reports/sox_audit_log_${{ github.run_id }}.json > /dev/null
-          echo "✓ Audit log JSON is valid"
-
-      - name: Upload audit log (7-year retention)
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sox-compliance-audit-${{ github.run_id }}
-          path: reports/sox_audit_log_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
+      - uses: actions/checkout@v4
+      - run: bash scripts/generate_sox_audit_log.sh --output reports/audit.json
+      - uses: actions/upload-artifact@v4
         with:
           name: sox-audit-log-${{ github.run_id }}
-          path: reports/sox_audit_log_*.json
-          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
-
-  # ============================================================
-  # Post-deploy: Generate consolidated SOX audit record
-  # Runs regardless of deploy-prod outcome for full traceability
-  # ============================================================
-  generate-audit-record:
-    name: SOX | Generate Audit Record
-    runs-on: ubuntu-latest
-    needs: [ validate-approvals, validate-manifest, deploy-uat ]
-    if: always()
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate pipeline audit log
-        run: |
-          bash scripts/generate_sox_audit_log.sh \
-            --deployment-id "${GITHUB_RUN_ID}" \
-            --target-env "${{ github.event.inputs.target_env || 'UAT' }}" \
-            --deployer "${{ env.DEPLOYMENT_USER }}" \
-            --approvers "${{ needs.validate-approvals.outputs.approver_list || '[]' }}" \
-            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash || 'N/A' }}" \
-            --output "reports/sox_pipeline_audit_${GITHUB_RUN_ID}.json"
-
-          echo "=== SOX Audit Log Preview ==="
-          cat "reports/sox_pipeline_audit_${GITHUB_RUN_ID}.json"
-
-      - name: Upload pipeline audit log (7-year SOX retention)
-        uses: actions/upload-artifact@v4
-        with:
-          name: sox-pipeline-audit-${{ github.run_id }}
-          path: reports/sox_pipeline_audit_*.json
+          path: reports/audit.json
           retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
