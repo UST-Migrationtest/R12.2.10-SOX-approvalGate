@@ -59,10 +59,10 @@ OBJECT_COUNT=0
 OBJECT_TYPES="{}"
 if [[ -f "MANIFEST.txt" ]]; then
   OBJECT_COUNT=$(grep -c "^OBJECT:" MANIFEST.txt 2>/dev/null || echo 0)
-  PLS_CNT=$(grep "^OBJECT:.*\.pk[sb]" MANIFEST.txt 2>/dev/null | wc -l | tr -d ' ')
-  OAF_CNT=$(grep "^OBJECT:.*\.xml\|\.java" MANIFEST.txt 2>/dev/null | wc -l | tr -d ' ')
-  LDT_CNT=$(grep "^OBJECT:.*\.ldt" MANIFEST.txt 2>/dev/null | wc -l | tr -d ' ')
-  FMB_CNT=$(grep "^OBJECT:.*\.fmb\|\.rdf" MANIFEST.txt 2>/dev/null | wc -l | tr -d ' ')
+  PLS_CNT=$(awk '/^OBJECT:.*\.(pks|pkb)$/ {count++} END {print count + 0}' MANIFEST.txt)
+  OAF_CNT=$(awk '/^OBJECT:.*\.(xml|java)$/ {count++} END {print count + 0}' MANIFEST.txt)
+  LDT_CNT=$(awk '/^OBJECT:.*\.ldt$/ {count++} END {print count + 0}' MANIFEST.txt)
+  FMB_CNT=$(awk '/^OBJECT:.*\.(fmb|rdf)$/ {count++} END {print count + 0}' MANIFEST.txt)
   OBJECT_TYPES="{\"plsql\": ${PLS_CNT:-0}, \"oaf\": ${OAF_CNT:-0}, \"fndload\": ${LDT_CNT:-0}, \"forms_reports\": ${FMB_CNT:-0}}"
 fi
 
