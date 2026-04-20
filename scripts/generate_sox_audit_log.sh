@@ -113,11 +113,30 @@ cat > "$OUTPUT_FILE" <<AUDITEOF
     "object_types": ${OBJECT_TYPES}
   },
   "sox_controls": {
-    "control_1_dual_approval": "${TARGET_ENV}" == "PROD" ? "ENFORCED" : "NOT_REQUIRED",
-    "control_2_sod": "ENFORCED",
-    "control_3_audit_trail": "GENERATED",
-    "control_4_environment_gate": "ENFORCED",
-    "control_5_manifest_hash": "RECORDED",
+    "control_1_dual_approval": {
+      "status": "ENFORCED",
+      "description": "Minimum 2 non-author PR approvals required for PROD",
+      "target_env": "${TARGET_ENV}",
+      "applied": $([ "${TARGET_ENV}" = "PROD" ] && echo "true" || echo "false")
+    },
+    "control_2_sod": {
+      "status": "ENFORCED",
+      "description": "PR author cannot approve their own code"
+    },
+    "control_3_audit_trail": {
+      "status": "GENERATED",
+      "description": "Machine-readable audit log generated and retained for 7 years"
+    },
+    "control_4_environment_gate": {
+      "status": "ENFORCED",
+      "description": "PROD environment protection with named reviewer requirement",
+      "environment": "${TARGET_ENV}"
+    },
+    "control_5_manifest_hash": {
+      "status": "RECORDED",
+      "description": "SHA256 hash of MANIFEST.txt immutably recorded",
+      "hash": "${MANIFEST_HASH}"
+    },
     "retention_policy": {
       "days": ${SOX_RETENTION_DAYS},
       "years": 7,

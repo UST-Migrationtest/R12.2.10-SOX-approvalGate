@@ -115,6 +115,79 @@ fi
 
 echo ""
 
+# ── Control 5: MANIFEST.txt format validation ───────────────────────────────
+echo "--- Control 5: MANIFEST.txt Format ---"
+if [[ -f "MANIFEST.txt" ]]; then
+  REQUIRED_HEADERS=("DEPLOYMENT_ID" "TARGET_ENV" "DEPLOYER" "DEPLOYMENT_DATE" "CHANGE_TICKET")
+  ALL_HEADERS=true
+  for header in "${REQUIRED_HEADERS[@]}"; do
+    if grep -q "^${header}:" MANIFEST.txt; then
+      echo "PASS — MANIFEST.txt contains header: $header"
+    else
+      echo "FAIL — MANIFEST.txt missing header: $header"
+      FAILED=1
+      ALL_HEADERS=false
+    fi
+  done
+  
+  OBJECT_COUNT=$(grep -c "^OBJECT:" MANIFEST.txt 2>/dev/null || echo 0)
+  if [[ "$OBJECT_COUNT" -gt 0 ]]; then
+    echo "PASS — MANIFEST.txt contains $OBJECT_COUNT deployment objects"
+  else
+    echo "WARN — MANIFEST.txt has no deployment objects (OBJECT: lines)"
+  fi
+else
+  echo "FAIL — MANIFEST.txt not found"
+  FAILED=1
+fi
+
+echo ""
+
+# ── Control 6: Deployment scripts exist ─────────────────────────────────────
+echo "--- Control 6: Deployment Scripts ---"
+SCRIPTS=("scripts/validate_approvals.sh" "scripts/generate_sox_audit_log.sh" "scripts/sox_controls_check.sh")
+for script in "${SCRIPTS[@]}"; do
+  if [[ -f "$script" ]]; then
+    echo "PASS — $script exists"
+  else
+    echo "FAIL — $script not found"
+    FAILED=1
+  fi
+done
+
+echo ""
+
+# ── Control 7: Workflow files exist ─────────────────────────────────────────
+echo "--- Control 7: GitHub Actions Workflows ---"
+WORKFLOWS=(".github/workflows/prod-deployment-sox.yml")
+for wf in "${WORKFLOWS[@]}"; do
+  if [[ -f "$wf" ]]; then
+    echo "PASS — $wf exists"
+  else
+    echo "FAIL — $wf not found"
+    FAILED=1
+  fi
+done
+
+echo ""
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo "========================================"
+if [[ $FAILED -eq 0 ]]; then
+  echo "✓ ALL SOX INTERNAL CONTROLS PASSED"
+  echo "Ready for deployment to PROD"
+else
+  echo "✗ SOX CONTROLS CHECK FAILED"
+  echo "Fix all FAIL items above before proceeding"
+fi
+echo "========================================"
+
+exit $FAILED
+  FAILED=1
+fi
+
+echo ""
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo "========================================"
 if [[ $FAILED -eq 0 ]]; then
