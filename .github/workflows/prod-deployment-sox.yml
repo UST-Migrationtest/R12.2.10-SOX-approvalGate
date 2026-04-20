@@ -290,6 +290,66 @@ jobs:
 
       - name: Upload SOX audit log (7-year retention)
         uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sox-audit-log-prod-${{ github.run_id }}
+          path: reports/sox_audit_log_*.json
+          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
+
+  # ============================================================
+  # SOX Compliance Audit Record — Runs on ALL outcomes
+  # CRITICAL: if: always() ensures audit trail is complete
+  # even if deployment fails. Required per SOX §802.
+  # ============================================================
+  generate-audit-record:
+    name: SOX | Generate Audit Record
+    runs-on: ubuntu-latest
+    needs: [ validate-approvals, validate-manifest, deploy-uat ]
+    if: always()  # CRITICAL: runs even if prior jobs fail
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate consolidated SOX audit log
+        run: |
+          TARGET_ENV="${{ github.event.inputs.target_env }}"
+          if [[ -z "$TARGET_ENV" ]]; then
+            TARGET_ENV="UAT"
+          fi
+
+          bash scripts/generate_sox_audit_log.sh \
+            --deployment-id "${{ github.event.inputs.deployment_id || github.run_id }}" \
+            --target-env "$TARGET_ENV" \
+            --deployer "${{ env.DEPLOYMENT_USER }}" \
+            --approvers "${{ needs.validate-approvals.outputs.approver_list }}" \
+            --manifest-hash "${{ needs.validate-manifest.outputs.manifest_hash }}" \
+            --output "reports/sox_audit_log_${{ github.run_id }}.json"
+
+      - name: Validate audit log JSON syntax
+        run: |
+          python3 -m json.tool reports/sox_audit_log_${{ github.run_id }}.json > /dev/null
+          echo "✓ Audit log JSON is valid"
+
+      - name: Upload consolidated audit log (7-year retention)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sox-compliance-audit-${{ github.run_id }}
+          path: reports/sox_audit_log_*.json
+          retention-days: ${{ env.SOX_AUDIT_RETENTION_DAYS }}
+
+      - name: Report SOX compliance status
+        if: always()
+        run: |
+          AUDIT_FILE="reports/sox_audit_log_${{ github.run_id }}.json"
+          if [[ -f "$AUDIT_FILE" ]]; then
+            COMPLIANCE=$(python3 -c "import json; print(json.load(open('$AUDIT_FILE')).get('compliance',{}).get('status','UNKNOWN'))")
+            echo "SOX Compliance Status: $COMPLIANCE"
+            echo "Audit log location: $AUDIT_FILE"
+            [[ "$COMPLIANCE" == "COMPLIANT" ]] || exit 1
+          else
+            echo "WARNING: Audit log not found at $AUDIT_FILE"
+          fi
         with:
           name: sox-audit-log-${{ github.run_id }}
           path: reports/sox_audit_log_*.json
