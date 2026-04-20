@@ -193,3 +193,5 @@
 - **GitHub admin bypass:** Admins can bypass branch protection. The `validate-approvals` pipeline job provides an additional code-level check. Alert: even pipeline jobs can be re-run by admins — for full SOX assurance, integrate with an external SIEM (out of scope for this POC).
 - **Forked repo PRs:** GitHub does not allow `GITHUB_TOKEN` to access PR review status on forks. The `validate_approvals.sh` script assumes a non-fork PR. Document this limitation.
 - **Clock skew:** Audit log timestamps use `date -u` (UTC). Ensure runner timezone is UTC to avoid time offset issues.
+
+- Codex will review your output once you are done.
