@@ -6,6 +6,7 @@ on:
     paths:
       - 'modules/**'
       - 'MANIFEST.txt'
+      - 'scripts/**'
       - '.github/workflows/prod-deployment-sox.yml'
   pull_request:
     branches: [ main ]
