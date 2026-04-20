@@ -1,0 +1,100 @@
+# CODEOWNERS — SOX Segregation of Duties (SoD) Enforcement
+# ============================================================
+# These rules determine who MUST review changes to specific
+# paths before a PR can be merged to main.
+#
+# SOX Requirement (§404):
+#   - Developers may not approve their own code.
+#   - All production-bound code changes require Finance OR
+#     Audit approval in addition to technical review.
+#   - Changes to security-sensitive config require Security team.
+#
+# Enforcement:
+#   Branch protection on `main` must have:
+#     - Require a pull request before merging: YES
+#     - Require approvals: 2
+#     - Require review from Code Owners: YES
+#     - Dismiss stale PR approvals: YES
+#     - Require status checks to pass before merging: YES
+#       (validate-approvals, validate-manifest must pass)
+#
+# Format: <path-pattern> <owner> [<owner>...]
+# ============================================================
+
+# ──────────────────────────────────────────────────────────
+# Global: All changes require at least one Tech Lead review
+# ──────────────────────────────────────────────────────────
+*                                   @UST-Migrationtest/ebs-tech-leads
+
+# ──────────────────────────────────────────────────────────
+# GitHub Actions Workflows
+# SOX: Any pipeline change must be approved by DevOps Lead
+# AND IT Audit (pipeline is a financial control)
+# ──────────────────────────────────────────────────────────
+.github/                            @UST-Migrationtest/devops-leads @UST-Migrationtest/it-audit
+.github/workflows/                  @UST-Migrationtest/devops-leads @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# CODEOWNERS file itself
+# SOX: Only IT Audit can modify the ownership rules
+# ──────────────────────────────────────────────────────────
+.github/CODEOWNERS                  @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# Accounts Payable Modules (XXAP_*)
+# Requires: AP Dev + AP Finance Controller sign-off
+# SOX: AP processes involve payment disbursements
+# ──────────────────────────────────────────────────────────
+modules/payables/                   @UST-Migrationtest/ap-developers @UST-Migrationtest/ap-finance-controllers
+modules/payables/plsql/             @UST-Migrationtest/ebs-plsql-developers @UST-Migrationtest/ap-finance-controllers
+modules/payables/workflows/         @UST-Migrationtest/ap-developers @UST-Migrationtest/ap-finance-controllers @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# Accounts Receivable Modules (XXAR_*)
+# Requires: AR Dev + AR Revenue Accountant sign-off
+# ──────────────────────────────────────────────────────────
+modules/receivables/                @UST-Migrationtest/ar-developers @UST-Migrationtest/ar-revenue-accountants
+modules/receivables/plsql/          @UST-Migrationtest/ebs-plsql-developers @UST-Migrationtest/ar-revenue-accountants
+modules/receivables/config/         @UST-Migrationtest/ar-developers @UST-Migrationtest/ar-revenue-accountants @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# Order Management Modules (XXOE_*)
+# Requires: OE Dev + Operations Manager sign-off
+# ──────────────────────────────────────────────────────────
+modules/order_to_payment/           @UST-Migrationtest/oe-developers @UST-Migrationtest/operations-managers
+
+# ──────────────────────────────────────────────────────────
+# Shared / Common Utilities (XXCOM_*)
+# Shared code used by all modules — widest blast radius.
+# Requires: Senior Tech Lead + Tech Lead from each module team.
+# ──────────────────────────────────────────────────────────
+modules/shared/                     @UST-Migrationtest/senior-tech-leads @UST-Migrationtest/ap-developers @UST-Migrationtest/ar-developers @UST-Migrationtest/oe-developers
+
+# ──────────────────────────────────────────────────────────
+# SOX Configuration (sox_config.json)
+# SOX: Control configuration is owned exclusively by IT Audit
+# Changes here directly affect financial controls
+# ──────────────────────────────────────────────────────────
+config/sox_config.json              @UST-Migrationtest/it-audit @UST-Migrationtest/cfo-office
+
+# ──────────────────────────────────────────────────────────
+# Deployment Manifest
+# SOX: Manifest drives what gets deployed to PROD.
+# Requires: Release Manager + IT Audit review
+# ──────────────────────────────────────────────────────────
+MANIFEST.txt                        @UST-Migrationtest/release-managers @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# Audit Scripts
+# SOX: Audit log generation scripts must not be modified
+# without IT Audit sign-off
+# ──────────────────────────────────────────────────────────
+scripts/generate_sox_audit_log.sh   @UST-Migrationtest/it-audit @UST-Migrationtest/devops-leads
+scripts/validate_approvals.sh       @UST-Migrationtest/it-audit @UST-Migrationtest/devops-leads
+scripts/sox_controls_check.sh       @UST-Migrationtest/it-audit
+
+# ──────────────────────────────────────────────────────────
+# Documentation
+# Design docs and compliance docs require IT Audit review
+# ──────────────────────────────────────────────────────────
+docs/MOD-03-SOX-Design.md           @UST-Migrationtest/it-audit @UST-Migrationtest/ebs-tech-leads

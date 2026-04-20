@@ -1,0 +1,28 @@
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI temporary files
+*.tmp
+*.bak
+
+# Locally generated audit logs (committed copies are in reports/)
+!reports/sox_audit_log_sample.json
+sox_audit_log_*.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files — never commit credentials
+.env
+.env.*
+*.p4passwd
+perforce.p4settings

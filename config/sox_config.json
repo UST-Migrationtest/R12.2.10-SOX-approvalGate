@@ -1,0 +1,105 @@
+{
+  "_comment": "SOX Controls Configuration — UST Oracle EBS CI/CD Framework",
+  "_schema": "UST-SOX-CONFIG-v1",
+  "_owner": "IT Audit (it-audit@ust.com)",
+  "_last_updated": "2025-08-20",
+  "_change_control": "This file is CODEOWNERS-protected. Changes require IT Audit and CFO approval.",
+
+  "approval_gates": {
+    "min_approvers": 2,
+    "require_codeowners": true,
+    "sod_enforced": true,
+    "allow_self_approval": false,
+    "dismiss_stale_approvals": true,
+    "require_linear_history": true
+  },
+
+  "environment_protection": {
+    "DEV": {
+      "required_reviewers": 0,
+      "auto_deploy": true,
+      "wait_timer_minutes": 0,
+      "branches_allowed": ["feature/*", "fix/*", "main"]
+    },
+    "UAT": {
+      "required_reviewers": 1,
+      "required_reviewer_teams": ["ebs-tech-leads"],
+      "auto_deploy": false,
+      "wait_timer_minutes": 0,
+      "branches_allowed": ["main"]
+    },
+    "PROD": {
+      "required_reviewers": 2,
+      "required_reviewer_teams": ["ebs-tech-leads", "it-audit"],
+      "auto_deploy": false,
+      "wait_timer_minutes": 5,
+      "branches_allowed": ["main"],
+      "prevent_self_review": true
+    }
+  },
+
+  "financial_controls": {
+    "dual_approval_threshold": 50000,
+    "dual_approval_threshold_currency": "USD",
+    "payment_authorization_matrix": {
+      "level_1_max": 10000,
+      "level_2_max": 50000,
+      "level_3_requires_cfo": true
+    },
+    "sox_section": "404",
+    "coso_components": [
+      "Control Environment",
+      "Risk Assessment",
+      "Control Activities",
+      "Information and Communication",
+      "Monitoring"
+    ]
+  },
+
+  "audit_trail": {
+    "retention_days": 2555,
+    "retention_years": 7,
+    "artifact_prefix": "sox-audit-log",
+    "required_fields": [
+      "deployment_id",
+      "deployer",
+      "target_environment",
+      "deployment_timestamp",
+      "approvers",
+      "manifest_hash",
+      "github_run_url",
+      "compliance_status"
+    ],
+    "storage": "GitHub Actions Artifacts",
+    "backup_location": "Azure Blob Storage (sox-compliance-archive)",
+    "encryption": "AES-256"
+  },
+
+  "branch_protection_main": {
+    "required_status_checks": [
+      "SOX Gate 1 | PR Approval Count >= 2",
+      "SOX Gate 2 | Validate Deployment Manifest",
+      "Security | No Credentials in Scripts"
+    ],
+    "require_up_to_date": true,
+    "require_code_owner_reviews": true,
+    "required_approving_review_count": 2,
+    "dismiss_stale_reviews": true,
+    "restrict_push_access": true,
+    "push_allowed_teams": ["release-managers"]
+  },
+
+  "sox_audit_log_baseline_hashes": {
+    "scripts/generate_sox_audit_log.sh": "REPLACE_WITH_SHA256_AFTER_FIRST_APPROVED_COMMIT",
+    "scripts/validate_approvals.sh": "REPLACE_WITH_SHA256_AFTER_FIRST_APPROVED_COMMIT",
+    ".github/CODEOWNERS": "REPLACE_WITH_SHA256_AFTER_FIRST_APPROVED_COMMIT",
+    ".github/workflows/prod-deployment-sox.yml": "REPLACE_WITH_SHA256_AFTER_FIRST_APPROVED_COMMIT"
+  },
+
+  "notifications": {
+    "sox_violation_alert_email": "sox-audit@ust.com",
+    "deployment_notification_email": "ebs-releases@ust.com",
+    "slack_webhook_secret": "SLACK_SOX_WEBHOOK",
+    "pagerduty_integration_key": "PAGERDUTY_SOX_KEY"
+  }
+}

@@ -1,0 +1,65 @@
+DEPLOYMENT_ID: DEP-2025-08-20-0042
+CHANGE_TICKET: CHG0094127
+JIRA_TICKET: EBSDEV-1847
+TARGET_ENV: PROD
+DEPLOYMENT_DATE: 2025-08-20
+DEPLOYER: a.patel
+APPROVER_1: r.kumar
+APPROVER_2: j.smith
+RELEASE_MANAGER: l.jones
+FINANCIAL_RISK: MEDIUM
+REQUIRES_ROLLBACK_PLAN: YES
+ROLLBACK_TESTED: YES
+EBS_VERSION: R12.2.10
+PATCH_LEVEL: 12.2.10.0.0 (Jan 2025 RUP)
+DEPLOYMENT_SEQUENCE: SEQUENTIAL
+ADOP_COMPATIBLE: YES
+DOWNTIME_REQUIRED: NO
+MAINTENANCE_WINDOW: NONE
+
+# ── Deployment Objects ──────────────────────────────────────────────────────
+# Format: OBJECT: <path> [TYPE] [DEPENDENCY_ORDER]
+
+OBJECT: modules/payables/plsql/XXAP_INVOICE_UTILS.pks
+OBJECT: modules/payables/plsql/XXAP_INVOICE_UTILS.pkb
+OBJECT: modules/payables/plsql/XXAP_PAYMENT_UTILS.pks
+OBJECT: modules/payables/plsql/XXAP_PAYMENT_UTILS.pkb
+OBJECT: modules/payables/plsql/XXAP_SUPPLIER_UTILS.pks
+OBJECT: modules/payables/plsql/XXAP_SUPPLIER_UTILS.pkb
+OBJECT: modules/payables/oaf/oracle/apps/xxap/invoice/webui/InvoicePG.xml
+OBJECT: modules/payables/oaf/oracle/apps/xxap/invoice/webui/InvoiceRN.xml
+OBJECT: modules/payables/oaf/oracle/apps/xxap/invoice/webui/InvoicePGCO.java
+OBJECT: modules/payables/config/XXAP_INV_CONC_PROG.ldt
+OBJECT: modules/payables/config/XXAP_INV_VALUE_SET.ldt
+OBJECT: modules/payables/config/XXAP_MSG_DEF.ldt
+OBJECT: modules/shared/plsql/XXCOM_CONSTANTS.pks
+OBJECT: modules/shared/plsql/XXCOM_LOGGING_PKG.pks
+OBJECT: modules/shared/plsql/XXCOM_LOGGING_PKG.pkb
+OBJECT: modules/shared/plsql/XXCOM_DATE_UTILS.pks
+OBJECT: modules/shared/plsql/XXCOM_DATE_UTILS.pkb
+OBJECT: modules/shared/config/XXCOM_LOOKUPS.ldt
+OBJECT: modules/shared/config/XXCOM_PROFILE_OPTIONS.ldt
+
+# ── Pre-Deployment Checks ───────────────────────────────────────────────────
+PRE_CHECK: Verify no compile errors in DEV/UAT environments
+PRE_CHECK: Confirm ADOP edition is in PATCH edition
+PRE_CHECK: Verify backup of existing objects exists
+PRE_CHECK: Confirm all approvers are listed and non-authors (SoD)
+
+# ── Post-Deployment Checks ──────────────────────────────────────────────────
+POST_CHECK: Run XXAP_INVOICE_UTILS compile check
+POST_CHECK: Validate concurrent program XXAP_INV_PROCESS is enabled
+POST_CHECK: Run OAF import verification for InvoicePG.xml
+POST_CHECK: Confirm FNDLOAD LDT files loaded successfully
+POST_CHECK: Test XXCOM_LOGGING_PKG.log from SQL*Plus
+
+# ── Rollback Steps ──────────────────────────────────────────────────────────
+ROLLBACK: Restore previous package version from $XXCUSTOM/plsql/backup/
+ROLLBACK: Run FNDLOAD DOWNLOAD to export current LDT state (pre-rollback snapshot)
+ROLLBACK: Recompile previous package version
+ROLLBACK: Re-import previous OAF pages from backup location
+
+# ── Sign-Off ────────────────────────────────────────────────────────────────
+MANIFEST_SHA256: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+SIGNED_BY: a.patel (Technical Lead)
+SIGNED_DATE: 2025-08-20T09:30:00Z
