@@ -1,3 +1,4 @@
+-- SOX UAT PR test: sample change for environment gate validation
 CREATE OR REPLACE PACKAGE XXAP_INVOICE_UTILS AUTHID CURRENT_USER AS
 -- =============================================================================
 -- Package Name    : XXAP_INVOICE_UTILS

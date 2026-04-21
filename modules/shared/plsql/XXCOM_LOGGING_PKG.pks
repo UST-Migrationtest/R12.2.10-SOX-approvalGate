@@ -1,3 +1,4 @@
+-- SOX PR approval gate test: sample change for dual approval validation
 CREATE OR REPLACE PACKAGE XXCOM_LOGGING_PKG AUTHID CURRENT_USER AS
 -- Source: modules/shared/plsql/XXCOM_LOGGING_PKG.pks
   gc_pkg_name         CONSTANT VARCHAR2(30) := 'XXCOM_LOGGING_PKG';
